@@ -46,7 +46,7 @@ func fixture(t *testing.T) (root, uri string) {
 	if err := os.WriteFile(source, []byte(exampleSource), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run := filepath.Join(root, ".jev", "run")
+	run := filepath.Join(root, ".witness", "run")
 	if err := os.MkdirAll(filepath.Join(run, "evidence"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestFindingIsMarkedStaleWhenSourceChanges(t *testing.T) {
 
 func TestServerRepublishesWhenVerifierReplacesRun(t *testing.T) {
 	root, uri := fixture(t)
-	run := filepath.Join(root, ".jev", "run")
+	run := filepath.Join(root, ".witness", "run")
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	s := newServer(outW)

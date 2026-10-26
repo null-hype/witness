@@ -21,5 +21,5 @@ for _, response in pairs(vim.lsp.buf_request_sync(0, 'textDocument/definition', 
 end
 if found ~= 2 then fail('expected two evidence locations, got ' .. found) end
 
-io.stdout:write('ok: diagnostic and evidence navigation came from .jev/run/findings.json\n')
+io.stdout:write('ok: diagnostic and evidence navigation came from .witness/run/findings.json\n')
 vim.cmd('qa!')

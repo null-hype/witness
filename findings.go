@@ -11,8 +11,8 @@ import (
 	"strings"
 )
 
-// Run is the entire contract between a verifier and jev-lsp.
-// jev-lsp does not care whether the producer was Playwright, a model checker,
+// Run is the entire contract between a verifier and witness.
+// witness does not care whether the producer was Playwright, a model checker,
 // static analysis, an agent audit, CI, or something else.
 type Run struct {
 	Version  int       `json:"version"`
@@ -128,7 +128,7 @@ func diagnostics(path, text string, run Run) []Diagnostic {
 				End:   Position{Line: line, Character: len(strings.TrimRight(lines[line], "\r"))},
 			},
 			Severity: sev,
-			Source:   "jev",
+			Source:   "witness",
 			Code:     f.ID,
 			Message:  message,
 		})

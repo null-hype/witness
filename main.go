@@ -121,7 +121,7 @@ func (s *server) handle(m message) {
 				"textDocumentSync":   map[string]any{"openClose": true, "change": 1, "save": true},
 				"definitionProvider": true,
 			},
-			"serverInfo": map[string]string{"name": "jev-lsp"},
+			"serverInfo": map[string]string{"name": "witness"},
 		})
 	case "shutdown":
 		s.reply(m.ID, nil)
@@ -223,19 +223,19 @@ func runKey(runDir string) string {
 }
 
 func findRun(path string) (string, error) {
-	if dir := os.Getenv("JEV_RUN_DIR"); dir != "" {
+	if dir := os.Getenv("WITNESS_RUN_DIR"); dir != "" {
 		if _, err := os.Stat(filepath.Join(dir, "findings.json")); err != nil {
-			return "", fmt.Errorf("JEV_RUN_DIR has no findings.json: %s", dir)
+			return "", fmt.Errorf("WITNESS_RUN_DIR has no findings.json: %s", dir)
 		}
 		return dir, nil
 	}
 	for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
-		run := filepath.Join(dir, ".jev", "run")
+		run := filepath.Join(dir, ".witness", "run")
 		if _, err := os.Stat(filepath.Join(run, "findings.json")); err == nil {
 			return run, nil
 		}
 		if parent := filepath.Dir(dir); parent == dir {
-			return "", fmt.Errorf("no .jev/run/findings.json above %s", path)
+			return "", fmt.Errorf("no .witness/run/findings.json above %s", path)
 		}
 	}
 }
