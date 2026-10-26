@@ -1,10 +1,3 @@
-// jev-lsp shows a jev-playwright run on the tests that asked its Questions:
-// a diagnostic on each test whose answer was out of range, not collected or
-// skipped, and go-to-definition from that test to the evidence Jev judged.
-//
-// It reads JEV_RUN_DIR, or the newest run under the nearest runs/ directory
-// above the open file that was asked of the code on disk, and publishes again
-// when a newer run lands. With no such run it shows the newest, marked stale.
 package main
 
 import (
@@ -35,47 +28,17 @@ type server struct {
 	sendMu sync.Mutex
 	mu     sync.Mutex
 	docs   map[string]string
-	// What each open document was last published against: run, staleness, mtime.
-	shown map[string]string
-	// The code hash of each harness, refreshed when a file is opened or saved.
-	codes map[string]string
+	shown  map[string]string
 }
 
 func newServer(out io.Writer) *server {
-	return &server{out: out, docs: map[string]string{}, shown: map[string]string{}, codes: map[string]string{}}
-}
-
-// runFor picks the run a document is shown against. refresh recomputes the
-// harness's code hash, which only changes when files do.
-func (s *server) runFor(uri string, refresh bool) (string, chosenRun, error) {
-	path, err := uriToPath(uri)
-	if err != nil {
-		return "", chosenRun{}, err
-	}
-	if dir := os.Getenv("JEV_RUN_DIR"); dir != "" {
-		return path, chosenRun{Dir: dir}, nil
-	}
-	root, err := harnessRoot(path)
-	if err != nil {
-		return path, chosenRun{}, err
-	}
-	s.mu.Lock()
-	code, known := s.codes[root]
-	s.mu.Unlock()
-	if refresh || !known {
-		code = currentCode(root)
-		s.mu.Lock()
-		s.codes[root] = code
-		s.mu.Unlock()
-	}
-	run, err := chooseRun(root, code)
-	return path, run, err
+	return &server{out: out, docs: map[string]string{}, shown: map[string]string{}}
 }
 
 func main() {
 	log.SetOutput(os.Stderr)
 	s := newServer(os.Stdout)
-	go s.watch(2 * time.Second)
+	go s.watch(500 * time.Millisecond)
 	if err := s.serve(os.Stdin); err != nil && err != io.EOF {
 		log.Fatal(err)
 	}
@@ -131,7 +94,6 @@ func (s *server) send(m message) {
 
 func (s *server) reply(id json.RawMessage, result any) {
 	if result == nil {
-		// A JSON-RPC response must carry a result; null is a valid one.
 		result = json.RawMessage("null")
 	}
 	s.send(message{ID: id, Result: result})
@@ -165,13 +127,13 @@ func (s *server) handle(m message) {
 		s.reply(m.ID, nil)
 	case "textDocument/didOpen":
 		s.setDoc(uri, p.TextDocument.Text)
-		s.publish(uri, true)
+		s.publish(uri)
 	case "textDocument/didChange":
 		if n := len(p.ContentChanges); n > 0 {
 			s.setDoc(uri, p.ContentChanges[n-1].Text)
 		}
 	case "textDocument/didSave":
-		s.publish(uri, true)
+		s.publish(uri)
 	case "textDocument/didClose":
 		s.mu.Lock()
 		delete(s.docs, uri)
@@ -179,9 +141,11 @@ func (s *server) handle(m message) {
 		s.mu.Unlock()
 	case "textDocument/definition":
 		var locs []Location
-		if path, run, err := s.runFor(uri, false); err == nil {
-			if c, err := loadComparison(run.Dir); err == nil {
-				locs = definition(path, p.Position.Line, c, run.Dir)
+		if path, err := uriToPath(uri); err == nil {
+			if runDir, err := findRun(path); err == nil {
+				if run, err := loadRun(runDir); err == nil {
+					locs = definition(path, p.Position.Line, run, runDir)
+				}
 			}
 		}
 		s.reply(m.ID, locs)
@@ -198,22 +162,25 @@ func (s *server) setDoc(uri, text string) {
 	s.mu.Unlock()
 }
 
-// publish sends this document's diagnostics for the run it is shown against.
-func (s *server) publish(uri string, refresh bool) {
+func (s *server) publish(uri string) {
 	s.mu.Lock()
 	text, open := s.docs[uri]
 	s.mu.Unlock()
 	if !open {
 		return
 	}
+
 	diags := []Diagnostic{}
 	key := ""
-	if path, run, err := s.runFor(uri, refresh); err == nil {
-		key = runKey(run)
-		if c, err := loadComparison(run.Dir); err == nil {
-			diags = diagnostics(path, text, c, run.Stale)
+	if path, err := uriToPath(uri); err == nil {
+		if runDir, err := findRun(path); err == nil {
+			key = runKey(runDir)
+			if run, err := loadRun(runDir); err == nil {
+				diags = diagnostics(path, text, run)
+			}
 		}
 	}
+
 	s.mu.Lock()
 	s.shown[uri] = key
 	s.mu.Unlock()
@@ -221,9 +188,10 @@ func (s *server) publish(uri string, refresh bool) {
 	s.send(message{Method: "textDocument/publishDiagnostics", Params: params})
 }
 
-// watch publishes again whenever a document's run is replaced by a newer one.
 func (s *server) watch(every time.Duration) {
-	for range time.Tick(every) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for range ticker.C {
 		s.mu.Lock()
 		shown := make(map[string]string, len(s.shown))
 		for uri, key := range s.shown {
@@ -231,19 +199,45 @@ func (s *server) watch(every time.Duration) {
 		}
 		s.mu.Unlock()
 		for uri, key := range shown {
-			if _, run, err := s.runFor(uri, false); err == nil && runKey(run) != key {
-				s.publish(uri, false)
+			path, err := uriToPath(uri)
+			if err != nil {
+				continue
+			}
+			runDir, err := findRun(path)
+			if err != nil {
+				continue
+			}
+			if next := runKey(runDir); next != key {
+				s.publish(uri)
 			}
 		}
 	}
 }
 
-func runKey(run chosenRun) string {
-	info, err := os.Stat(filepath.Join(run.Dir, "comparison.json"))
+func runKey(runDir string) string {
+	info, err := os.Stat(filepath.Join(runDir, "findings.json"))
 	if err != nil {
-		return run.Dir
+		return ""
 	}
-	return fmt.Sprintf("%s stale=%t @%d", run.Dir, run.Stale, info.ModTime().UnixNano())
+	return fmt.Sprintf("%s@%d:%d", runDir, info.ModTime().UnixNano(), info.Size())
+}
+
+func findRun(path string) (string, error) {
+	if dir := os.Getenv("JEV_RUN_DIR"); dir != "" {
+		if _, err := os.Stat(filepath.Join(dir, "findings.json")); err != nil {
+			return "", fmt.Errorf("JEV_RUN_DIR has no findings.json: %s", dir)
+		}
+		return dir, nil
+	}
+	for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
+		run := filepath.Join(dir, ".jev", "run")
+		if _, err := os.Stat(filepath.Join(run, "findings.json")); err == nil {
+			return run, nil
+		}
+		if parent := filepath.Dir(dir); parent == dir {
+			return "", fmt.Errorf("no .jev/run/findings.json above %s", path)
+		}
+	}
 }
 
 func uriToPath(uri string) (string, error) {

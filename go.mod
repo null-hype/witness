@@ -1,3 +1,3 @@
-module github.com/null-hype/agent-plugins/jev-playwright/lsp
+module github.com/null-hype/jev-lsp
 
 go 1.22
